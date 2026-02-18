@@ -70,3 +70,40 @@ class MealLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# ============================================================
+# Recipe Recommendation Models (Meal Planner Feature)
+# ============================================================
+
+class RecipeRecommendRequest(BaseModel):
+    ingredients: List[str]  # e.g. ["계란", "김치", "양파"]
+    diet_type: str = "regular"  # regular, diet, high_protein, keto, low_carb, vegan
+    meal_type: Optional[str] = None  # breakfast, lunch, dinner, snack
+    servings: int = 1
+    is_roulette: bool = False  # True if random roulette mode
+
+class RecipeIngredient(BaseModel):
+    name: str
+    qty: str
+    available: bool = True
+
+class RecipeNutrition(BaseModel):
+    total_kcal: int
+    macros: Macros
+
+class RecipeItem(BaseModel):
+    name: str
+    description: str
+    cooking_time_min: int
+    difficulty: str  # easy, medium, hard
+    servings: int = 1
+    ingredients: List[RecipeIngredient]
+    nutrition: RecipeNutrition
+    recipe_steps: List[str]
+    tips: str = ""
+    missing_ingredients: Optional[List[RecipeIngredient]] = None
+
+class RecipeRecommendResponse(BaseModel):
+    recommendations: List[RecipeItem]
+    bonus_recommendations: List[RecipeItem] = []
+    message: str

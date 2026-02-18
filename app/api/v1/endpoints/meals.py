@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.schemas.meal import MealIngestRequest, MealLogResponse, AIAnalysisResult, MealLogCreate, Macros
-from app.services.llm_service import analyze_meal_text
+from app.schemas.meal import MealIngestRequest, MealLogResponse, AIAnalysisResult, MealLogCreate, Macros, RecipeRecommendRequest, RecipeRecommendResponse
+from app.services.llm_service import analyze_meal_text, recommend_recipes
 from app.models.meal import MealLog
 from app.models.meal_item import MealItem
 from app.models.failed_log import FailedLog
 import json
-from datetime import datetime
+from typing import Optional, List
+from datetime import datetime, date, time
 
 router = APIRouter()
 
@@ -170,11 +171,34 @@ async def ingest_meal(request: MealIngestRequest, db: Session = Depends(get_db))
     return response
 
 @router.get("/", response_model=list[MealLogResponse])
-async def read_meals(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+async def read_meals(
+    skip: int = 0, 
+    limit: int = 100, 
+    date: Optional[date] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db)
+):
     """
     Retrieve meal logs.
+    Supports filtering by specific date or date range.
     """
-    meals = db.query(MealLog).order_by(MealLog.eaten_at.desc()).offset(skip).limit(limit).all()
+    query = db.query(MealLog)
+
+    if date:
+        start_dt = datetime.combine(date, time.min)
+        end_dt = datetime.combine(date, time.max)
+        query = query.filter(MealLog.eaten_at >= start_dt, MealLog.eaten_at <= end_dt)
+    
+    if start_date:
+        start_dt = datetime.combine(start_date, time.min)
+        query = query.filter(MealLog.eaten_at >= start_dt)
+        
+    if end_date:
+        end_dt = datetime.combine(end_date, time.max)
+        query = query.filter(MealLog.eaten_at <= end_dt)
+
+    meals = query.order_by(MealLog.eaten_at.desc()).offset(skip).limit(limit).all()
     return meals
 
 @router.delete("/{meal_id}")
@@ -216,3 +240,19 @@ async def duplicate_meal(meal_id: int, request: DuplicateMealRequest, db: Sessio
     db.refresh(new_meal)
     
     return new_meal
+
+@router.post("/recommend", response_model=RecipeRecommendResponse)
+async def recommend_meal(request: RecipeRecommendRequest):
+    """
+    Recommend recipes based on available ingredients and diet type.
+    """
+    if len(request.ingredients) < 1:
+        raise HTTPException(status_code=400, detail="최소 1개 이상의 재료를 선택해주세요.")
+    if len(request.ingredients) > 20:
+        raise HTTPException(status_code=400, detail="재료는 최대 20개까지 선택 가능합니다.")
+    
+    try:
+        result = recommend_recipes(request)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"추천 서비스 오류: {str(e)}")

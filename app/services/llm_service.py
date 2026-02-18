@@ -1,11 +1,133 @@
 import google.generativeai as genai
 from app.core.config import settings
-from app.schemas.meal import AIAnalysisResult
+from app.schemas.meal import AIAnalysisResult, RecipeRecommendRequest, RecipeRecommendResponse
 import json
 from datetime import datetime
+from typing import List
 
 # Initialize Gemini
 genai.configure(api_key=settings.gemini_api_key)
+
+
+def recommend_recipes(request: RecipeRecommendRequest) -> RecipeRecommendResponse:
+    """
+    Recommends recipes based on available ingredients and diet type using Gemini.
+    """
+    ingredients_str = ", ".join(request.ingredients)
+    
+    diet_guidelines = {
+        "regular": "특별한 제한 없이 균형 잡힌 가정식",
+        "diet": "1끼 400~500kcal 이하, 저지방 조리법 우선 (찜, 삶기, 그릴). 튀김/볶음 지양",
+        "high_protein": "단백질 30g 이상 포함. 닭가슴살, 계란, 두부 등 고단백 재료 우선",
+        "keto": "탄수화물 20g 이하, 고지방 식재료 활용. 밥/면/빵 제외",
+        "low_carb": "탄수화물 50g 이하. 밥 대신 채소 위주",
+        "vegan": "동물성 재료 완전 제외 (고기, 생선, 계란, 유제품 모두 제외)"
+    }
+    
+    diet_guide = diet_guidelines.get(request.diet_type, diet_guidelines["regular"])
+    
+    roulette_instruction = ""
+    if request.is_roulette:
+        roulette_instruction = """
+        ⚠️ ROULETTE MODE: 딱 1개의 요리만 recommendations에 추천하세요. 
+        bonus_recommendations는 빈 배열로 반환하세요.
+        가장 재미있고 의외의 조합을 추천해주세요!
+        """
+
+    prompt = f"""당신은 한국 가정요리 전문 셰프 AI입니다.
+
+사용자가 보유한 재료: {ingredients_str}
+식단 유형: {request.diet_type} ({diet_guide})
+인원수: {request.servings}명
+{roulette_instruction}
+
+다음 규칙에 따라 식단을 추천하세요:
+
+[recommendations - 메인 추천]
+1. 보유 재료만으로 바로 만들 수 있는 요리를 추천 (소금, 후추, 간장, 식용유 등 기본 양념은 보유한 것으로 간주)
+2. 2~5개 추천 (룰렛 모드가 아닌 경우)
+3. 반드시 선택된 식단 유형의 영양 가이드라인을 준수
+
+[bonus_recommendations - 서브 추천]
+4. 보유 재료 + 1~2개 재료만 추가하면 만들 수 있는 요리 추천
+5. 부족한 재료를 missing_ingredients에 명확히 표시 (available: false)
+6. 최대 3개까지 추천
+
+[공통 규칙]
+7. 각 요리에 대해 필요 재료, 영양 정보(칼로리, 탄단지), 레시피 단계, 조리 팁을 제공
+8. 한국인 기준 적절한 1인분 양 기준
+9. 난이도는 easy, medium, hard 중 하나
+10. 모든 텍스트는 한국어로 작성
+
+Output JSON format ONLY:
+{{
+  "recommendations": [
+    {{
+      "name": "김치볶음밥",
+      "description": "매콤하고 고소한 한 그릇 요리",
+      "cooking_time_min": 15,
+      "difficulty": "easy",
+      "servings": 1,
+      "ingredients": [
+        {{"name": "김치", "qty": "1컵", "available": true}},
+        {{"name": "계란", "qty": "1개", "available": true}},
+        {{"name": "밥", "qty": "1공기", "available": true}}
+      ],
+      "nutrition": {{
+        "total_kcal": 450,
+        "macros": {{"carbs": 55, "protein": 15, "fat": 12}}
+      }},
+      "recipe_steps": [
+        "김치를 잘게 썰어주세요.",
+        "팬에 기름을 두르고 김치를 볶아주세요.",
+        "밥을 넣고 잘 섞어 볶아주세요.",
+        "계란 프라이를 올려 완성합니다."
+      ],
+      "tips": "김치 국물을 조금 넣으면 더 맛있어요!"
+    }}
+  ],
+  "bonus_recommendations": [
+    {{
+      "name": "김치찌개",
+      "description": "뜨끈하고 얼큰한 대표 찌개",
+      "cooking_time_min": 20,
+      "difficulty": "easy",
+      "servings": 1,
+      "ingredients": [
+        {{"name": "김치", "qty": "1컵", "available": true}},
+        {{"name": "두부", "qty": "1/2모", "available": false}}
+      ],
+      "nutrition": {{
+        "total_kcal": 280,
+        "macros": {{"carbs": 15, "protein": 18, "fat": 12}}
+      }},
+      "recipe_steps": ["김치를 썰어 끓입니다.", "두부를 넣고 간을 맞춥니다."],
+      "tips": "참치캔을 넣으면 더 풍성해져요!",
+      "missing_ingredients": [{{"name": "두부", "qty": "1/2모", "available": false}}]
+    }}
+  ],
+  "message": "보유 재료로 바로 만들 수 있는 요리를 추천해요! 🍳"
+}}
+"""
+
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        data = json.loads(response.text)
+        
+        return RecipeRecommendResponse(
+            recommendations=data.get("recommendations", []),
+            bonus_recommendations=data.get("bonus_recommendations", []),
+            message=data.get("message", "추천 완료!")
+        )
+        
+    except Exception as e:
+        print(f"Gemini Recipe Recommend Error: {e}")
+        raise e
 
 def analyze_meal_text(text: str, current_time: datetime, meal_type_hint: str = None, persona: str = 'friendly') -> AIAnalysisResult:
     """
@@ -82,7 +204,7 @@ def analyze_meal_text(text: str, current_time: datetime, meal_type_hint: str = N
     """
 
     try:
-        model = genai.GenerativeModel('gemini-flash-latest')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         chat = model.start_chat(history=[
             {"role": "user", "parts": [system_prompt]}
@@ -92,6 +214,16 @@ def analyze_meal_text(text: str, current_time: datetime, meal_type_hint: str = N
         
 
         response_text = response.text
+        # Clean up potential markdown formatting
+        if response_text.strip().startswith("```json"):
+            response_text = response_text.strip()[7:]
+            if response_text.strip().endswith("```"):
+                response_text = response_text.strip()[:-3]
+        elif response_text.strip().startswith("```"):
+            response_text = response_text.strip()[3:]
+            if response_text.strip().endswith("```"):
+                response_text = response_text.strip()[:-3]
+
         data = json.loads(response_text)
         
         # Suggestions Logic

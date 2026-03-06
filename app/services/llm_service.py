@@ -1,12 +1,10 @@
-import google.generativeai as genai
 from app.core.config import settings
 from app.schemas.meal import AIAnalysisResult, RecipeRecommendRequest, RecipeRecommendResponse
 import json
 from datetime import datetime
 from typing import Optional
-
-# Initialize Gemini
-genai.configure(api_key=settings.gemini_api_key)
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 
 def _clean_json_text(response_text: str) -> str:
@@ -24,24 +22,63 @@ def _clean_json_text(response_text: str) -> str:
 
 def _generate_content(prompt: str, preferred_model: str) -> str:
     """
-    Support both modern google-generativeai (GenerativeModel) and legacy 0.1.0rc1 API.
+    Call Gemini REST API directly for Python 3.8 + legacy SDK environments.
     """
-    if hasattr(genai, "GenerativeModel"):
-        model = genai.GenerativeModel(preferred_model)
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"},
-        )
-        return response.text
+    def normalize_model_name(model_name: str) -> str:
+        if not model_name:
+            return "models/gemini-2.0-flash"
+        return model_name if model_name.startswith("models/") else f"models/{model_name}"
 
-    # python3.8 fallback: legacy API does not provide GenerativeModel/chat interfaces
-    response = genai.generate_text(
-        model="models/text-bison-001",
-        prompt=prompt,
-        temperature=0.2,
-        max_output_tokens=2048,
-    )
-    return getattr(response, "result", "")
+    def call_model(model_name: str) -> str:
+        normalized = normalize_model_name(model_name)
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/"
+            f"{quote(normalized, safe='/')}:generateContent?key={settings.gemini_api_key}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        }
+        req = Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+        body = json.loads(raw)
+        candidates = body.get("candidates") or []
+        if not candidates:
+            raise RuntimeError(f"No candidates in response for {normalized}")
+        parts = (((candidates[0] or {}).get("content") or {}).get("parts")) or []
+        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
+        if not text:
+            raise RuntimeError(f"Empty text response for {normalized}")
+        return text
+
+    candidate_models = []
+    for model_name in (
+        preferred_model,
+        "models/gemini-2.5-flash",
+        "models/gemini-2.0-flash",
+        "models/gemini-2.0-flash-001",
+    ):
+        normalized = normalize_model_name(model_name)
+        if normalized not in candidate_models:
+            candidate_models.append(normalized)
+
+    last_error = None
+    for model_name in candidate_models:
+        try:
+            return call_model(model_name)
+        except Exception as e:
+            last_error = e
+            continue
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No Gemini model available")
 
 
 def recommend_recipes(request: RecipeRecommendRequest) -> RecipeRecommendResponse:
@@ -276,5 +313,14 @@ def analyze_meal_text(text: str, current_time: datetime, meal_type_hint: str = N
         
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        # Fallback or re-raise
-        raise e 
+        fallback_name = (text or "").strip()[:30] or "식사"
+        return AIAnalysisResult(
+            meal_type=meal_type_hint or "snack",
+            food_items=[{"name": fallback_name, "qty": "1 serving", "kcal": 0}],
+            total_kcal=0,
+            macros=None,
+            suggestions=[],
+            message="AI 분석 서버 연결이 불안정해 임시로 간단 기록만 생성했어요. 저장 후 수정해 주세요.",
+            confidence=0.1,
+            eaten_at=current_time,
+        )

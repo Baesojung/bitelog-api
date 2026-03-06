@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Float, func
+from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Float, func, ForeignKey
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -6,7 +6,8 @@ class MealLog(Base):
     __tablename__ = "meal_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, default=1, index=True)  # MVP: Single User
+    user_id = Column(Integer, ForeignKey("users.id"), default=1, index=True)
+    user = relationship("User", back_populates="meals")
     
     # Original Input
     raw_text = Column(Text, nullable=False)

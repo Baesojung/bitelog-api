@@ -9,11 +9,13 @@ from app.models.failed_log import FailedLog
 import json
 from typing import Optional, List
 from datetime import datetime, date, time
+from app.api.deps import get_current_active_user
+from app.models.user import User
 
 router = APIRouter()
 
 @router.post("/analyze", response_model=AIAnalysisResult)
-async def analyze_meal_endpoint(request: MealIngestRequest, db: Session = Depends(get_db)):
+async def analyze_meal_endpoint(request: MealIngestRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """
     Step 1: Analyze meal text without saving.
     """
@@ -27,7 +29,7 @@ async def analyze_meal_endpoint(request: MealIngestRequest, db: Session = Depend
         raise HTTPException(status_code=503, detail=str(e))
 
 @router.post("/create", response_model=MealLogResponse)
-async def create_meal_log(meal_data: MealLogCreate, db: Session = Depends(get_db)):
+async def create_meal_log(meal_data: MealLogCreate, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """
     Step 2: Save confirmed meal log.
     """
@@ -62,7 +64,7 @@ async def create_meal_log(meal_data: MealLogCreate, db: Session = Depends(get_db
     confidence = meal_data.confidence if meal_data.confidence else 0.9
 
     db_log = MealLog(
-        user_id=meal_data.user_id,
+        user_id=current_user.id,
         raw_text=meal_data.raw_text,
         meal_type=meal_data.meal_type,
         eaten_at=meal_data.eaten_at,
@@ -81,7 +83,7 @@ async def create_meal_log(meal_data: MealLogCreate, db: Session = Depends(get_db
     return db_log
 
 @router.post("/ingest", response_model=MealLogResponse)
-async def ingest_meal(request: MealIngestRequest, db: Session = Depends(get_db)):
+async def ingest_meal(request: MealIngestRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """
     Ingest natural language meal log, analyze with AI, and save to DB.
     """
@@ -91,7 +93,7 @@ async def ingest_meal(request: MealIngestRequest, db: Session = Depends(get_db))
     except Exception as e:
         # Save to FailedLog
         failed_log = FailedLog(
-            user_id=1,
+            user_id=current_user.id,
             raw_text=request.text,
             error_message=str(e)
         )
@@ -108,7 +110,7 @@ async def ingest_meal(request: MealIngestRequest, db: Session = Depends(get_db))
     # 2. Check for empty food items
     if not ai_result.food_items:
         failed_log = FailedLog(
-            user_id=1,
+            user_id=current_user.id,
             raw_text=request.text,
             error_message="No food items identified by AI"
         )
@@ -147,7 +149,7 @@ async def ingest_meal(request: MealIngestRequest, db: Session = Depends(get_db))
         meal_items.append(meal_item)
 
     db_log = MealLog(
-        user_id=1, # Fixed for MVP
+        user_id=current_user.id,
         raw_text=request.text,
         meal_type=ai_result.meal_type,
         eaten_at=ai_result.eaten_at or request.client_local_time, # Use AI parsed time or client time
@@ -178,13 +180,14 @@ async def read_meals(
     date: Optional[date] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
     Retrieve meal logs.
     Supports filtering by specific date or date range.
     """
-    query = db.query(MealLog)
+    query = db.query(MealLog).filter(MealLog.user_id == current_user.id)
 
     if date:
         start_dt = datetime.combine(date, time.min)
@@ -203,11 +206,11 @@ async def read_meals(
     return meals
 
 @router.delete("/{meal_id}")
-async def delete_meal(meal_id: int, db: Session = Depends(get_db)):
+async def delete_meal(meal_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """
     Delete a meal log.
     """
-    meal = db.query(MealLog).filter(MealLog.id == meal_id).first()
+    meal = db.query(MealLog).filter(MealLog.id == meal_id, MealLog.user_id == current_user.id).first()
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
     
@@ -217,11 +220,11 @@ async def delete_meal(meal_id: int, db: Session = Depends(get_db)):
 
 from app.schemas.meal import DuplicateMealRequest
 @router.post("/{meal_id}/duplicate", response_model=MealLogResponse)
-async def duplicate_meal(meal_id: int, request: DuplicateMealRequest, db: Session = Depends(get_db)):
+async def duplicate_meal(meal_id: int, request: DuplicateMealRequest, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """
     Duplicate a meal log with optional new date.
     """
-    original_meal = db.query(MealLog).filter(MealLog.id == meal_id).first()
+    original_meal = db.query(MealLog).filter(MealLog.id == meal_id, MealLog.user_id == current_user.id).first()
     if not original_meal:
         raise HTTPException(status_code=404, detail="Meal not found")
     

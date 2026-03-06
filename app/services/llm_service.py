@@ -3,10 +3,45 @@ from app.core.config import settings
 from app.schemas.meal import AIAnalysisResult, RecipeRecommendRequest, RecipeRecommendResponse
 import json
 from datetime import datetime
-from typing import List
+from typing import Optional
 
 # Initialize Gemini
 genai.configure(api_key=settings.gemini_api_key)
+
+
+def _clean_json_text(response_text: str) -> str:
+    text = (response_text or "").strip()
+    if text.startswith("```json"):
+        text = text[7:]
+        if text.strip().endswith("```"):
+            text = text.strip()[:-3]
+    elif text.startswith("```"):
+        text = text[3:]
+        if text.strip().endswith("```"):
+            text = text.strip()[:-3]
+    return text.strip()
+
+
+def _generate_content(prompt: str, preferred_model: str) -> str:
+    """
+    Support both modern google-generativeai (GenerativeModel) and legacy 0.1.0rc1 API.
+    """
+    if hasattr(genai, "GenerativeModel"):
+        model = genai.GenerativeModel(preferred_model)
+        response = model.generate_content(
+            prompt,
+            generation_config={"response_mime_type": "application/json"},
+        )
+        return response.text
+
+    # python3.8 fallback: legacy API does not provide GenerativeModel/chat interfaces
+    response = genai.generate_text(
+        model="models/text-bison-001",
+        prompt=prompt,
+        temperature=0.2,
+        max_output_tokens=2048,
+    )
+    return getattr(response, "result", "")
 
 
 def recommend_recipes(request: RecipeRecommendRequest) -> RecipeRecommendResponse:
@@ -111,13 +146,8 @@ Output JSON format ONLY:
 """
 
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        
-        data = json.loads(response.text)
+        response_text = _generate_content(prompt, "gemini-2.0-flash")
+        data = json.loads(_clean_json_text(response_text))
         
         return RecipeRecommendResponse(
             recommendations=data.get("recommendations", []),
@@ -204,27 +234,9 @@ def analyze_meal_text(text: str, current_time: datetime, meal_type_hint: str = N
     """
 
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        chat = model.start_chat(history=[
-            {"role": "user", "parts": [system_prompt]}
-        ])
-        
-        response = chat.send_message(text, generation_config={"response_mime_type": "application/json"})
-        
-
-        response_text = response.text
-        # Clean up potential markdown formatting
-        if response_text.strip().startswith("```json"):
-            response_text = response_text.strip()[7:]
-            if response_text.strip().endswith("```"):
-                response_text = response_text.strip()[:-3]
-        elif response_text.strip().startswith("```"):
-            response_text = response_text.strip()[3:]
-            if response_text.strip().endswith("```"):
-                response_text = response_text.strip()[:-3]
-
-        data = json.loads(response_text)
+        prompt = f"{system_prompt}\n\nUser Input:\n{text}"
+        response_text = _generate_content(prompt, "gemini-2.5-flash")
+        data = json.loads(_clean_json_text(response_text))
         
         # Suggestions Logic
         suggestions_data = data.get("suggestions", [])

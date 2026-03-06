@@ -170,7 +170,7 @@ async def ingest_meal(request: MealIngestRequest, db: Session = Depends(get_db))
     
     return response
 
-@router.get("/", response_model=list[MealLogResponse])
+@router.get("/", response_model=List[MealLogResponse])
 async def read_meals(
     skip: int = 0, 
     limit: int = 100, 

@@ -9,6 +9,7 @@ class User(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     nickname = Column(String(50), nullable=True)
+    daily_goal_kcal = Column(Integer, nullable=False, default=2000)
     is_active = Column(Boolean(), default=True)
 
     meals = relationship("MealLog", back_populates="user", cascade="all, delete-orphan")

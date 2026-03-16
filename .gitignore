@@ -28,3 +28,7 @@ Thumbs.db
 
 # Local virtual env
 .venv/
+
+# Local runtime files
+.run/
+keep8000.sh

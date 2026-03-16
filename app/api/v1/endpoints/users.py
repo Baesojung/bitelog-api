@@ -26,6 +26,8 @@ def update_user_me(
         current_user.hashed_password = get_password_hash(user_in.password)
     if user_in.nickname is not None:
         current_user.nickname = user_in.nickname
+    if user_in.daily_goal_kcal is not None:
+        current_user.daily_goal_kcal = user_in.daily_goal_kcal
 
     db.add(current_user)
     db.commit()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.schemas.meal import MealIngestRequest, MealLogResponse, AIAnalysisResult, MealLogCreate, Macros, RecipeRecommendRequest, RecipeRecommendResponse
+from app.schemas.meal import MealIngestRequest, MealLogResponse, AIAnalysisResult, MealLogCreate, MealLogUpdate, Macros, RecipeRecommendRequest, RecipeRecommendResponse
 from app.services.llm_service import analyze_meal_text, recommend_recipes
 from app.models.meal import MealLog
 from app.models.meal_item import MealItem
@@ -217,6 +217,53 @@ async def delete_meal(meal_id: int, current_user: User = Depends(get_current_act
     db.delete(meal)
     db.commit()
     return {"message": "Meal deleted"}
+
+@router.put("/{meal_id}", response_model=MealLogResponse)
+async def update_meal(meal_id: int, meal_data: MealLogUpdate, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
+    """
+    Update an existing meal log.
+    """
+    meal = db.query(MealLog).filter(MealLog.id == meal_id, MealLog.user_id == current_user.id).first()
+    if not meal:
+        raise HTTPException(status_code=404, detail="Meal not found")
+
+    meal_items = []
+    items_json_list = []
+
+    for item in meal_data.items:
+        meal_item = MealItem(
+            name=item.name,
+            qty=item.qty,
+            kcal=item.kcal,
+            carbs=item.macros.carbs if item.macros else 0,
+            protein=item.macros.protein if item.macros else 0,
+            fat=item.macros.fat if item.macros else 0
+        )
+        meal_items.append(meal_item)
+
+        item_macros = item.macros.model_dump() if item.macros else None
+        items_json_list.append({
+            "name": item.name,
+            "qty": item.qty,
+            "kcal": item.kcal,
+            "macros": item_macros
+        })
+
+    meal.raw_text = meal_data.raw_text
+    meal.meal_type = meal_data.meal_type
+    meal.eaten_at = meal_data.eaten_at
+    meal.items_json = items_json_list
+    meal.total_kcal = meal_data.total_kcal
+    meal.macros = meal_data.macros.model_dump() if meal_data.macros else None
+    meal.ai_summary = meal_data.ai_summary
+    meal.confidence = meal_data.confidence if meal_data.confidence else 0.0
+    meal.items.clear()
+    meal.items.extend(meal_items)
+
+    db.commit()
+    db.refresh(meal)
+
+    return meal
 
 from app.schemas.meal import DuplicateMealRequest
 @router.post("/{meal_id}/duplicate", response_model=MealLogResponse)

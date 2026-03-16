@@ -52,6 +52,16 @@ class MealLogCreate(BaseModel):
     ai_summary: Optional[str] = None
     confidence: float = 0.0
 
+class MealLogUpdate(BaseModel):
+    raw_text: str
+    meal_type: Optional[str] = None
+    eaten_at: datetime
+    items: List[MealItemCreate]
+    total_kcal: int
+    macros: Optional[Macros] = None
+    ai_summary: Optional[str] = None
+    confidence: float = 0.0
+
 # Response Model (DB Model + Extra)
 class MealLogResponse(BaseModel):
     id: int
